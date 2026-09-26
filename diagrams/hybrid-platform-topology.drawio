@@ -1,0 +1,25 @@
+<mxfile host="app.diagrams.net" agent="Codex">
+  <diagram id="hybrid-platform" name="Hybrid platform topology">
+    <mxGraphModel dx="1214" dy="1155" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title1" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontFamily=Avenir Next;fontSize=14;fontStyle=1;fontColor=#52796F;" value="SERVICE PLACEMENT" vertex="1">
+          <mxGeometry height="25" width="300" x="82" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="onprem" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFDF9;strokeColor=#92A1A0;fontColor=#25323B;fontFamily=Avenir Next;fontSize=16;align=center;verticalAlign=middle;spacingLeft=16;spacingTop=10;" value="&lt;b&gt;On-prem DC1 / DC2&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;Anycast DNS: A .53 + B .54 in each DC&lt;br&gt;PowerDNS Recursor, FRR, BFD&lt;br&gt;Kea DHCP HA (hot-standby pair)&lt;br&gt;Vault performance secondary&lt;br&gt;OpenVPN fallback&lt;/span&gt;" vertex="1">
+          <mxGeometry height="180" width="305" x="82" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="aws" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCE9E2;strokeColor=#93AD9D;fontColor=#25323B;fontFamily=Avenir Next;fontSize=16;align=center;verticalAlign=middle;spacingLeft=16;spacingTop=10;" value="&lt;b&gt;AWS shared services&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;Anycast DNS: A .53 (AZ-a) + B .54 (AZ-b)&lt;br&gt;PowerDNS Recursor, FRR, TGW Connect&lt;br&gt;Vault primary, 3 AZs + DR Region&lt;br&gt;AWS Client VPN (SSO/MFA)&lt;/span&gt;" vertex="1">
+          <mxGeometry height="180" width="305" x="782" y="60" as="geometry" />
+        </mxCell>
+        <mxCell id="divider" parent="1" style="line;strokeWidth=1;fillColor=none;strokeColor=#CBD5E1;" value="" vertex="1">
+          <mxGeometry height="10" width="1005" x="82" y="235" as="geometry" />
+        </mxCell>
+        <mxCell id="transport" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EADFCE;strokeColor=#C7AE8D;fontColor=#25323B;fontFamily=Avenir Next;fontSize=16;align=center;verticalAlign=middle;spacingLeft=16;spacingTop=10;" value="&lt;b&gt;Hybrid transport&lt;/b&gt;&lt;br&gt;&lt;span style=&quot;font-size:12px&quot;&gt;Dual Direct Connect, 2 locations, transit VIF&lt;br&gt;Transit Gateway + TGW Connect (GRE + BGP)&lt;br&gt;Conditional /24 anycast aggregate, static allowed prefixes&lt;br&gt;Site-to-Site VPN backup over internet&lt;br&gt;Public VIF to S3 for bulk data (not via TGW)&lt;/span&gt;" vertex="1">
+          <mxGeometry height="140" width="428" x="372" y="80" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
