@@ -38,6 +38,12 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 - Clients shall not wait for a broken node: Each node withdraws within 5 second if the resolver stops answering on said node
 
 ### Failure behaviour
+| Event | Result |
+|-------|--------|
+| Node failure | It will withdraw its route. Next nearest node will be reachable. This will be very quick on prem and up to 30sec in AWS |
+| One DC is lost | The Other DC will answer for both groups|
+| Bad configuration change in one group | if Group A breaks (`.53`) then it is withdrawn. Group B (`.54`) can be retried with minimal timeout |
+| Direct connect is down | Each side resolves its own names. Only cross site fails |
 
 
 ## Vault
@@ -52,6 +58,12 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 - In the case AWS becomes unavailable, the on-prem replica would still be reachable in order to provide access to secrets and issue tokens as needed. It can still be unsealed because it does not depend on AWS KMS
 
 ### Failure behaviour
+| Event | Result |
+|-------|--------|
+| Node failure, or AZ failure | Raft keeps quorum and standby can take over as leader in a short timeframe |
+| Connection to AWS is lost | The read replica on prem can still read secrets and issue tokens. If any writes occur, they will be synced to primary when it comes up |
+| The primary region is down | The copy saved in the DR region will be promoted (manually) | 
+| On prem DC is down | No impact on AWS |
 
 
 ## DHCP
@@ -67,16 +79,28 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 - Here we are not dependent on anything in AWS 
 
 ### Failure behaviour
+| Event | Result |
+|-------|--------|
+| AWS is down | no impact |
+| Main server is lost due to DC1 failure | Standby can take over quickly with minimal disruption |
+| Both DC servers lost | The copy from AWS can be used as a recovery, if the optional step is implemented. This has a higher impact and requires recovery steps (manual or runbook) |
 
 ## Remote Access
+
 ### Placement
 - Using managed service as primary entry point.
 - The current solution will be used as fallback
+
 ### High Availability
 - Fall back to on-prem setup in case this becomes unavailable
 - Both endpoints will be made available in the same client profile. Changes will be user agnostic
-### Failure behaviour
 
+### Failure behaviour
+| Event | Result |
+|-------|--------|
+| AZ failure | low to no impact. Other AZ still running. Requires a reconnect at the most | 
+| AWS is lost | the DC OpenVPN will reconnect automatically after the current session drops |
+| One or more DCs lost | no impact on Client VPN users. Just the fallback is unavailable |
 
 
 
