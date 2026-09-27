@@ -33,6 +33,21 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 
 ![topology](diagrams/hybrid-platform-relationshipsv3.svg)
 
+## Connectivity foundation
+
+DC1 and DC2 will have their own dedicated Direct Connect connection. Each to a different DX location
+Each of the DCs will use a transit VIF to 1 (DX) gateway. This will be attached to the Transit Gateway in the primary region.
+If a failre is detected on the DX (BFD), traffic will be moved to a different connection (happens in about 1sec).
+In case of failure on both the DX connections, VPN over the internet from both DCs (site-to-site) will take over with BGP.
+
+The routing is designed in such a way, that each side will keep working on its own. The prefixes from the DCs will be advertised over Direct Connect.
+The AWS side will advertise its own fixed list which includes the CIDRs from the VPC, and the anycast aggregate.
+The `/32` address from the DNS nodes will be advertised locally, to the DC routers on-prem, and to the Transit Gateway over TGW Connect in AWS.
+Only the `/24` aggregate crosses DX, and on-prem advertises it only while one of its own nodes is up. Clients will always use the node closest to them.
+Only when every node is down, will they query over the link.
+
+Big data transfers use a separate public VIF straight to S3 and never go over the transit gateway
+
 # Service Design
 
 ## Recursive DNS
@@ -59,7 +74,7 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 ## Vault
 ### Placement
 - Across 3 AZs in one Region, we will have 5 nodes
-- Performance will be improved on prem by using a read replica. This shall be unsealed locally (HSM? Shamir?)
+- Performance will be improved on prem by using a read replica. This shall be unsealed locally (HSM? Shamir?). It will serve reads and will issue tokens in the DC. On prem clients will not depend on AWS
 - We will use a secondary disaster recovery copy in a separate AWS region
 - In this case we will use a load balancer in each site. Vault does not get an anycast address
 
@@ -71,7 +86,7 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 | Event | Result |
 |-------|--------|
 | Node failure, or AZ failure | Raft keeps quorum and standby can take over as leader in a short timeframe (seconds) |
-| Connection to AWS is lost | The read replica on prem can still read secrets and issue tokens. If any writes occur, they will be synced to primary when it comes up |
+| Connection to AWS is lost | The read replica on prem can still read secrets and issue tokens. If any writes occur, they will fail until the link is back up |
 | The primary region is down | The copy saved in the DR region will be promoted (manually) | 
 | On prem DC is down | No impact on AWS |
 
@@ -102,6 +117,7 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 - The current solution (on prem OpenVPN) will be used as fallback
 
 ### High Availability
+- Client VPN is multi AZ and can handle up to 36500 connections concurrently (2 subnets)
 - Fall back to on-prem setup in case this becomes unavailable
 - Both endpoints will be made available in the same client profile. Changes will be user agnostic
 
