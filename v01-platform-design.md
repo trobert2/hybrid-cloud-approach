@@ -6,19 +6,29 @@ In order to keep services reachable, even in the case of a provider loss or Data
 Single points of failure will be avoided and the AWS Well-Architected framework will be use as a quality check, with a focus on the [Hybrid Networking Lens](https://docs.aws.amazon.com/wellarchitected/latest/hybrid-networking-lens/hybrid-networking-lens.html)
 
 ## Assumptions
-- There are 2 Zones in the on prem data center
+- There are 2 separate locations on prem (DC1 and DC2)
 - There are 2 AWS Regions used for redundancy (1 primary, one for disaster recovery)
 - Since research data remains on prem, there is no hard requirement to transmit large volumes of data over the Transit Gateway on a regular basis
 - DeepL owns an ASN and it's address block. On prem routers already run BGP
 - Everything is deployed and managed using IaC and must be version controlled
+- We have enough budget to pay for Hashicorp licenses
+- The data can be sent to AWS (i.e. for training workloads) and thus no laws would be broken by doing so (Data Classification)
+- The team already runs BGP, has experience with FRR, GRE, Transit Gateway and all required skills to work with this stack
+- Our link capacity is at least 2 × 10Gbps. We have Direct Connect set up for our DCs and enough bandwith available to run the system
+
+
+## Constraints
+- Main storage solution stays on prem
+- Downtime during migration will be limited as much as possible
 
 
 ## Topology Bird's eye view
 - **Connectivity** - Direct Connect will provide the private connection between the sites. We use GRE tunnels and BGP propagation in this manner. We will use VPN as a site to site backup. 
 - **Service Name Resolution** - We define 2 DNS resolver groups with 3 members each. One member of each group (2 in total) present per location (DC1, DC2, AWS main region). They will use anycast. Group A will be associated with `.53` and Group B with `.54`.
-- **DHCP** -  DHCP leases are only relevant on prem and thus we will use 2 Kea servers will be used, one for each DC, in stand-by. EC2 instances get their own IP from DHCP. Optionally we can have an off-site Kea replica in AWS.
+- **DHCP** -  DHCP leases are only relevant on prem and thus we will use 2 Kea servers will be used, one for each DC, in stand-by. EC2 instances get their IPs allocated automatically in the VPC. Optionally we can have an off-site Kea replica in AWS.
 - **Vault** - We will be using vault enterprise with a 5 node split across 3 availability zones, with a read replica on prem and a DR copy in a different AWS region
 - **VPN** - AWS Client VPN will be used with a fallback to on-prem, in case of AWS downtime
+- **Research data** - Main storage cluster stays on prem. The data that was approved for copy will be uploaded to S3. The data sync will be done over another public VIF. Workloads can then read the data there. This keeps fees low and platform traffic free to use the other connection. Everything over 500 TB should not be transfered over the DX
 
 
 ![topology](diagrams/hybrid-platform-relationshipsv3.svg)
@@ -28,8 +38,8 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 ## Recursive DNS
 ### Placement
 - In each one of the locations we will have 2 nodes. One for each one of the 2 groups. Group A will answer on `.53` and group B will answer on `.54`.
-- We will run PowerDNS Recursor on one group and potentially Unbound on another, thus breaking one system will not break the other.
-- On prem clients will get both IPs, through DHCP. the Cloud base workloads will use the VPC Resolver. Thse will forward 
+- We will run PowerDNS Recursor on one group and Unbound on another, thus breaking one system (i.e. updating to a broken version) will not break the other.
+- On prem clients will get both IPs, through DHCP. the Cloud base workloads will use the VPC Resolver. The VPC Resolver will forward queries for on prem names to both IPs
 
 ![node groups](diagrams/07-node-groups.drawiov2.svg)
 ### High Availability
@@ -60,7 +70,7 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 ### Failure behaviour
 | Event | Result |
 |-------|--------|
-| Node failure, or AZ failure | Raft keeps quorum and standby can take over as leader in a short timeframe |
+| Node failure, or AZ failure | Raft keeps quorum and standby can take over as leader in a short timeframe (seconds) |
 | Connection to AWS is lost | The read replica on prem can still read secrets and issue tokens. If any writes occur, they will be synced to primary when it comes up |
 | The primary region is down | The copy saved in the DR region will be promoted (manually) | 
 | On prem DC is down | No impact on AWS |
@@ -88,8 +98,8 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 ## Remote Access
 
 ### Placement
-- Using managed service as primary entry point.
-- The current solution will be used as fallback
+- Using AWS Client VPN as the primary entry point
+- The current solution (on prem OpenVPN) will be used as fallback
 
 ### High Availability
 - Fall back to on-prem setup in case this becomes unavailable
@@ -102,8 +112,9 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 | AWS is lost | the DC OpenVPN will reconnect automatically after the current session drops |
 | One or more DCs lost | no impact on Client VPN users. Just the fallback is unavailable |
 
-
+# Migration plan
 
 # Notes
-- this design introduces Operational complexity in order to address the requirement of a "provider going down". In reality, AWS route53 has [an outstanding SLA](https://aws.amazon.com/route53/sla/). In practical terms, even during the famous 2025 [control plane incident](https://www.techupkeep.dev/blog/aws-outage-october-2025-analysis) query requests could still be served.
+- this design introduces Operational complexity in order to address the requirement of a "provider going down". In reality, AWS route53 has [an outstanding SLA](https://aws.amazon.com/route53/sla/). In practical terms, even during the famous 2025 [control plane incident](https://www.techupkeep.dev/blog/aws-outage-october-2025-analysis) query requests could still be served. 
 - based on the previous note, the Vault implementation is also adding a read replica on-prem. If the strategy is to become Cloud Native, then using AWS Secrets Manager ([99.99% SLA](https://aws.amazon.com/secrets-manager/sla/)), AWS PCA ([99.9% SLA](https://aws.amazon.com/private-ca/sla/)) and AWS IAM Roles Anywhere (no specific SLA, but core to AWS itself) would be preferred. The high up front cost in migrating would very likely be offset by gains in maintainence efficiency.
+- Vault Enterprise License is costly. This is a risk worth considering. Other solutions based on Openbao would need numbers to be properly evaluated, including available man-power-hours, available skills, budget for maintenance
