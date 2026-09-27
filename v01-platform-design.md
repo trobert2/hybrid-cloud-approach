@@ -1,5 +1,4 @@
 # Overview
-
 ## Scope
 
 In order to keep services reachable, even in the case of a provider loss or Datacenter (DC) going down, we will build a robust networking infrastructure. The core assumption is that the AWS Cloud is preferred, but On-prem data services will still live on in their current state.
@@ -14,7 +13,7 @@ Single points of failure will be avoided and the AWS Well-Architected framework 
 - We have enough budget to pay for Hashicorp licenses
 - The data can be sent to AWS (i.e. for training workloads) and thus no laws would be broken by doing so (Data Classification)
 - The team already runs BGP, has experience with FRR, GRE, Transit Gateway and all required skills to work with this stack
-- Our link capacity is at least 2 × 10Gbps. We have Direct Connect set up for our DCs and enough bandwith available to run the system
+- Our link capacity is at least 2 × 10Gbps. We have Direct Connect set up for our DCs and enough bandwidth available to run the system
 
 
 ## Constraints
@@ -92,7 +91,6 @@ Big data transfers use a separate public VIF straight to S3 and never go over th
 
 
 ## DHCP
-
 ### Placement
 - On prem only. In AWS IPs get allocated automatically
 - One Kea server will be present in each DC
@@ -111,7 +109,6 @@ Big data transfers use a separate public VIF straight to S3 and never go over th
 | Both DC servers lost | The copy from AWS can be used as a recovery, if the optional step is implemented. This has a higher impact and requires recovery steps (manual or runbook) |
 
 ## Remote Access
-
 ### Placement
 - Using AWS Client VPN as the primary entry point
 - The current solution (on prem OpenVPN) will be used as fallback
@@ -129,6 +126,75 @@ Big data transfers use a separate public VIF straight to S3 and never go over th
 | One or more DCs lost | no impact on Client VPN users. Just the fallback is unavailable |
 
 # Migration plan
+## Rules
+- Start the move with stateless services
+- Statefull services will be moved last
+- In each phase a new service will be added besides the existing one. Traffic the switches over with the option to roll back (i.e. poiting traffic back)
+- The next phase depends on the successful test of the previous one
+- Only one phase changes production at a time
+
+## Phase 0: Connectivity foundation
+
+Network is built first: two Direct Connect connections at separate DX locations, the Direct Connect gateway, the Transit Gateway in the primary region, and the site-to-site VPN backup from both DCs must exist before pushing other changes.
+BGP lists and the allowed prefixs will be deployed from the same IaC pipeline as everything else. No manual changes
+
+A game day is recommended before the switch. Redundancy (pulling down a connection or the whole DX) will be tested before commiting to the design.
+confirm that no `/32` from `10.255.0.0/24` appears on the DX sessions.
+
+| Entry condition | Rollback | User impact |
+|-------|--------|-------|
+| the DX ports and cross-connects are delivered | no services use ths yet, so we shut the BGP sessions  |  none |
+
+
+## Phase 1: Recursive DNS
+
+The DNS setup is planned first. It's stateless and every step can be quickly undone. We keep today's resolver address as `.53`.
+
+First we build group B on-prem (dc1-dns-b, dc2-dns-b), announcing the new address `.54`.
+We add `.54` to DHCP servers as the second resolver. The client will pick it up when their lease renews. This requires us to we wait at least one full lease time but keeps safety high. 
+
+Next we replace today's resolvers with group A nodes (dc1-dns-a, dc2-dns-a), one at a time. A new node announces `.53` next to the old one.
+We check its answers and its health-check alerts, then withdraw the old node by creating the drain file.
+We then add aws-dns-a and aws-dns-b over TGW Connect. The Route 53 outbound rule that sends on-prem zones to `.53` and `.54` will be created.
+
+| Entry condition | Rollback | User impact |
+|-------|--------|-------|
+| phase 0 complete and FRR configs are in version control | create the drain file on the new node. the route is withdrawn in about 5 seconds and the old node answers again. Old nodes stay until the soak ends. In AWS we remove the outbound rule's VPC associations. |  none. Clients keep the same resolver address throughout. |
+
+
+## Phase 2: Remote access
+
+The Client VPN endpoint is built in two AZs. The new client profile lists this new Client VPN first and the on-prem OpenVPN second.
+The IT team runs a pilot first, then the rollout goes team by team.
+The on-prem OpenVPN doesn't change: before the rollout it's the service everyone uses, and after it, it's the fallback.
+
+| Entry condition | Rollback | User impact |
+|-------|--------|-------|
+|phase 1 is done (VPN clients resolve through `.53` and `.54`); the fallback to on-prem OpenVPN has been tested | users switch back to the old profile | each user installs one new profile and reconnects once. |
+
+## Phase 3: Vault
+
+Vault is stateful and moves last among the services that change location. The move uses Vault Enterprise replication, so secrets, tokens and leases are copied rather than recreated.
+
+First, clients stop using Vault's anycast address and switch to the name `vault.<domain>`, which still points at the on-prem load balancer. This can start during phase 1, since it's only a client configuration change. Next, the new AWS cluster (5 nodes, 3 AZs, AWS KMS unseal) joins as a DR secondary of today's on-prem cluster and copies everything. In a change window we take a Raft snapshot, demote the on-prem cluster, promote the AWS cluster to primary, and point `vault.<domain>` at the AWS load balancer. After the soak, the on-prem cluster rejoins as a performance secondary (serving local reads and issuing tokens), and the DR secondary is added in Region 2.
+
+| Entry condition | Rollback | User impact |
+|-------|--------|-------|
+| phase 2 complete; license has been provided; promotion to the AWS vault has been previously tested (staging env); DNS TTL for `vault.<domain>` has been lowered| demote AWS, promote on-prem again and point the name back (before on prem has been a performance secondary); The Raft snapshot is the last resort.| Vault is unavailable for a few minutes in the change window|
+
+## Phase 4: DHCP
+
+DHCP stays on-prem, so this phase is an upgrade in place, not a move, and it can run alongside one of the previous phases.
+We build a Kea hot-standby pair across DC1 and DC2, convert the current configuration, and import the current leases.
+The routers' DHCP relays then switch to both Kea servers, one site at a time, starting with the least critical scopes.
+
+| Entry condition | Rollback | User impact |
+|-------|--------|-------|
+|test Kea HA | point the relays back to the old servers, which keep running until the soak ends| none |
+
+## Lastly
+- Do a check of all services and ensure they are all working, including the failover system
+- Ensure the old resources all all cleaned up. Old documentation needs to also be archived to avoid confusion and cut response times in case of an incident.
 
 # Notes
 - this design introduces Operational complexity in order to address the requirement of a "provider going down". In reality, AWS route53 has [an outstanding SLA](https://aws.amazon.com/route53/sla/). In practical terms, even during the famous 2025 [control plane incident](https://www.techupkeep.dev/blog/aws-outage-october-2025-analysis) query requests could still be served. 
